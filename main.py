@@ -1,3 +1,4 @@
+import gc
 import io
 import json
 import os
@@ -11,6 +12,11 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+# Cap PyTorch to a single thread. On a memory-constrained instance handling
+# one request at a time, extra threads don't speed things up but do add
+# overhead — keeping this low helps stay under a tight RAM ceiling.
+torch.set_num_threads(1)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "best_efficientnet_b3.pth")
@@ -26,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")  # force CPU explicitly; no GPU on this host
 
 # ---- Load class names ----
 if not os.path.exists(CLASS_NAMES_PATH):
@@ -41,9 +47,12 @@ model.classifier[1] = nn.Linear(in_features, len(class_names))
 
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(f"Model weights not found at {MODEL_PATH}")
-model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+state_dict = torch.load(MODEL_PATH, map_location=device)
+model.load_state_dict(state_dict)
+del state_dict  # free the raw state dict once weights are copied into the model
 model = model.to(device)
 model.eval()
+gc.collect()
 
 # ---- Preprocessing (must match validation transforms used in training) ----
 preprocess = transforms.Compose([
@@ -77,14 +86,18 @@ async def predict(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Could not read image file.")
 
     input_tensor = preprocess(image).unsqueeze(0).to(device)
+    del raw_bytes, image  # free the raw upload and decoded image promptly
 
-    with torch.no_grad():
+    with torch.inference_mode():
         logits = model(input_tensor)
         probabilities = torch.nn.functional.softmax(logits, dim=1)[0]
 
     top_probs, top_indices = torch.topk(probabilities, k=min(3, len(class_names)))
     top_probs = top_probs.cpu().numpy().tolist()
     top_indices = top_indices.cpu().numpy().tolist()
+
+    del input_tensor, logits, probabilities  # free inference tensors before responding
+    gc.collect()
 
     predictions = []
     for prob, idx in zip(top_probs, top_indices):
