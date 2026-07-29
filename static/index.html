@@ -171,7 +171,6 @@ const status = document.getElementById('status');
 const retryBtn = document.getElementById('retryBtn');
 
 let lastFile = null;
-let serverAwake = false;
 
 dropzone.addEventListener('click', () => fileInput.click());
 
@@ -227,32 +226,27 @@ function fetchWithTimeout(url, options, timeoutMs) {
   return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(id));
 }
 
-// Ping /health first. On Render's free tier the server can be asleep and
-// takes 30-60s to wake up on the first request — warming it up separately
-// lets us show an honest "waking up" message instead of the upload itself
-// silently timing out.
-async function wakeServer() {
-  if (serverAwake) return;
-  setStatus('<span class="spinner"></span>Waking up the server (can take up to a minute on first use)...');
-  try {
-    await fetchWithTimeout('/health', { method: 'GET' }, 60000);
-    serverAwake = true;
-  } catch (err) {
-    // If /health itself fails, we'll still try /predict below and surface that error.
-  }
-}
-
 async function runPrediction(file) {
   dropzone.classList.add('disabled');
   retryBtn.style.display = 'none';
-  await wakeServer();
 
   setStatus('<span class="spinner"></span>Analyzing image...');
   const formData = new FormData();
   formData.append('file', file);
 
+  // Update the message as time passes so a slow cold start doesn't look frozen.
+  // We use ONE request with a generous timeout, not two stacked requests —
+  // a wake-up ping followed by a separate predict call just doubles the
+  // wait and can time out twice instead of once.
+  const t1 = setTimeout(() => {
+    setStatus('<span class="spinner"></span>Still connecting — the server may be waking up from idle, this can take up to a minute...');
+  }, 12000);
+  const t2 = setTimeout(() => {
+    setStatus('<span class="spinner"></span>Almost there — first request after idle can be slow, hang tight...');
+  }, 45000);
+
   try {
-    const res = await fetchWithTimeout('/predict', { method: 'POST', body: formData }, 60000);
+    const res = await fetchWithTimeout('/predict', { method: 'POST', body: formData }, 100000);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Prediction failed.');
@@ -272,6 +266,8 @@ async function runPrediction(file) {
     setStatus(message, true);
     retryBtn.style.display = 'inline-block';
   } finally {
+    clearTimeout(t1);
+    clearTimeout(t2);
     dropzone.classList.remove('disabled');
   }
 }
