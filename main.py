@@ -109,9 +109,13 @@ async def predict(file: UploadFile = File(...)):
             "confidence": round(prob * 100, 2),
         })
 
+    top_confidence = predictions[0]["confidence"]
+    low_confidence = top_confidence < 65
+
     return JSONResponse({
         "predictions": predictions,
         "top_prediction": predictions[0],
+        "low_confidence": low_confidence,
     })
 
 

@@ -103,6 +103,13 @@
   }
   .healthy-badge { background: #EAF3EA; color: #2E7D32; }
   .disease-badge { background: #FDECEC; color: #C62828; }
+  .uncertain-badge { background: #FFF4E5; color: #B26A00; }
+  .uncertain-note {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin: 0 0 16px;
+  }
 
   #status { margin-top: 16px; font-size: 14px; color: var(--muted); text-align: center; }
   #status.error { color: #C62828; }
@@ -252,7 +259,7 @@ async function runPrediction(file) {
       throw new Error(err.detail || 'Prediction failed.');
     }
     const data = await res.json();
-    renderResults(data.predictions);
+    renderResults(data);
     setStatus('');
   } catch (err) {
     let message;
@@ -272,12 +279,22 @@ async function runPrediction(file) {
   }
 }
 
-function renderResults(predictions) {
+function renderResults(data) {
+  const predictions = data.predictions;
   const top = predictions[0];
-  const badgeClass = top.is_healthy ? 'healthy-badge' : 'disease-badge';
-  const badgeText = top.is_healthy ? '✓ Healthy' : '⚠ Issue Detected';
 
-  let html = `<span class="top-badge ${badgeClass}">${badgeText}</span>`;
+  let badgeClass, badgeText, note = '';
+
+  if (data.low_confidence) {
+    badgeClass = 'uncertain-badge';
+    badgeText = '❓ Not a confident match';
+    note = `<p class="uncertain-note">This image doesn't closely match any of the four trained crops (Cashew, Cassava, Maize, Tomato) — the model was only trained on those. It may be a different plant, a non-plant object, or a leaf type it hasn't seen. Below are its closest guesses, not a diagnosis.</p>`;
+  } else {
+    badgeClass = top.is_healthy ? 'healthy-badge' : 'disease-badge';
+    badgeText = top.is_healthy ? '✓ Healthy' : '⚠ Issue Detected';
+  }
+
+  let html = `<span class="top-badge ${badgeClass}">${badgeText}</span>${note}`;
   predictions.forEach((p, i) => {
     html += `
       <div class="result-row">
