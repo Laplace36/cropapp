@@ -288,7 +288,11 @@ function renderResults(data) {
   if (data.low_confidence) {
     badgeClass = 'uncertain-badge';
     badgeText = '❓ Not a confident match';
-    note = `<p class="uncertain-note">This image doesn't closely match any of the four trained crops (Cashew, Cassava, Maize, Tomato) — the model was only trained on those. It may be a different plant, a non-plant object, or a leaf type it hasn't seen. Below are its closest guesses, not a diagnosis.</p>`;
+    if (top.is_healthy) {
+      note = `<p class="uncertain-note">The model leans toward this looking healthy, but isn't confident enough to say so definitively. Below are its closest guesses — if in doubt, treat this as needing a closer look rather than an all-clear.</p>`;
+    } else {
+      note = `<p class="uncertain-note">This image doesn't closely match any of the four trained crops (Cashew, Cassava, Maize, Tomato) — the model was only trained on those. It may be a different plant, a non-plant object, or a leaf type it hasn't seen. Below are its closest guesses, not a diagnosis.</p>`;
+    }
   } else {
     badgeClass = top.is_healthy ? 'healthy-badge' : 'disease-badge';
     badgeText = top.is_healthy ? '✓ Healthy' : '⚠ Issue Detected';

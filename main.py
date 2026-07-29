@@ -110,7 +110,16 @@ async def predict(file: UploadFile = File(...)):
         })
 
     top_confidence = predictions[0]["confidence"]
-    low_confidence = top_confidence < 65
+    top_is_healthy = predictions[0]["is_healthy"]
+
+    # A false "healthy" verdict is more costly than an uncertain one — missing
+    # early-stage disease means the farmer takes no action. So we demand more
+    # confidence before committing to "Healthy" than we do before flagging a
+    # possible issue.
+    HEALTHY_THRESHOLD = 80
+    ISSUE_THRESHOLD = 65
+    required_confidence = HEALTHY_THRESHOLD if top_is_healthy else ISSUE_THRESHOLD
+    low_confidence = top_confidence < required_confidence
 
     return JSONResponse({
         "predictions": predictions,
