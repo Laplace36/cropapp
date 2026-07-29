@@ -1,3 +1,4 @@
+import ctypes
 import gc
 import io
 import json
@@ -17,6 +18,22 @@ from fastapi.staticfiles import StaticFiles
 # one request at a time, extra threads don't speed things up but do add
 # overhead — keeping this low helps stay under a tight RAM ceiling.
 torch.set_num_threads(1)
+
+try:
+    _libc = ctypes.CDLL("libc.so.6")
+except OSError:
+    _libc = None
+
+
+def release_memory():
+    """gc.collect() frees Python objects, but glibc's allocator often keeps
+    the underlying memory reserved for reuse rather than returning it to the
+    OS. On a tight 512MB instance that reserved-but-unused memory can pile up
+    across requests until the process gets OOM-killed. malloc_trim forces
+    glibc to actually hand freed pages back."""
+    gc.collect()
+    if _libc is not None:
+        _libc.malloc_trim(0)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "best_efficientnet_b3.pth")
@@ -52,7 +69,7 @@ model.load_state_dict(state_dict)
 del state_dict  # free the raw state dict once weights are copied into the model
 model = model.to(device)
 model.eval()
-gc.collect()
+release_memory()
 
 # ---- Preprocessing (must match validation transforms used in training) ----
 preprocess = transforms.Compose([
@@ -97,7 +114,7 @@ async def predict(file: UploadFile = File(...)):
     top_indices = top_indices.cpu().numpy().tolist()
 
     del input_tensor, logits, probabilities  # free inference tensors before responding
-    gc.collect()
+    release_memory()
 
     predictions = []
     for prob, idx in zip(top_probs, top_indices):
@@ -110,21 +127,26 @@ async def predict(file: UploadFile = File(...)):
         })
 
     top_confidence = predictions[0]["confidence"]
-    top_is_healthy = predictions[0]["is_healthy"]
 
-    # A false "healthy" verdict is more costly than an uncertain one — missing
-    # early-stage disease means the farmer takes no action. So we demand more
-    # confidence before committing to "Healthy" than we do before flagging a
-    # possible issue.
-    HEALTHY_THRESHOLD = 80
-    ISSUE_THRESHOLD = 65
-    required_confidence = HEALTHY_THRESHOLD if top_is_healthy else ISSUE_THRESHOLD
-    low_confidence = top_confidence < required_confidence
+    # A single yes/no cutoff treats "68% healthy" the same as "12% healthy" —
+    # both would just say "not confident." Three tiers instead:
+    #   confident (>=70%): commit to the verdict
+    #   leaning    (40-69%): name the lean, but frame it as uncertain, not a verdict
+    #   unclear    (<40%):  no reliable signal either way — likely out-of-scope input
+    CONFIDENT_THRESHOLD = 70
+    LEANING_THRESHOLD = 40
+
+    if top_confidence >= CONFIDENT_THRESHOLD:
+        tier = "confident"
+    elif top_confidence >= LEANING_THRESHOLD:
+        tier = "leaning"
+    else:
+        tier = "unclear"
 
     return JSONResponse({
         "predictions": predictions,
         "top_prediction": predictions[0],
-        "low_confidence": low_confidence,
+        "tier": tier,
     })
 
 

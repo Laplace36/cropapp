@@ -282,20 +282,26 @@ async function runPrediction(file) {
 function renderResults(data) {
   const predictions = data.predictions;
   const top = predictions[0];
+  const tier = data.tier;
 
   let badgeClass, badgeText, note = '';
 
-  if (data.low_confidence) {
-    badgeClass = 'uncertain-badge';
-    badgeText = '❓ Not a confident match';
-    if (top.is_healthy) {
-      note = `<p class="uncertain-note">The model leans toward this looking healthy, but isn't confident enough to say so definitively. Below are its closest guesses — if in doubt, treat this as needing a closer look rather than an all-clear.</p>`;
-    } else {
-      note = `<p class="uncertain-note">This image doesn't closely match any of the four trained crops (Cashew, Cassava, Maize, Tomato) — the model was only trained on those. It may be a different plant, a non-plant object, or a leaf type it hasn't seen. Below are its closest guesses, not a diagnosis.</p>`;
-    }
-  } else {
+  if (tier === 'confident') {
     badgeClass = top.is_healthy ? 'healthy-badge' : 'disease-badge';
     badgeText = top.is_healthy ? '✓ Healthy' : '⚠ Issue Detected';
+  } else if (tier === 'leaning') {
+    badgeClass = 'uncertain-badge';
+    if (top.is_healthy) {
+      badgeText = '❓ Leaning Healthy — Not Certain';
+      note = `<p class="uncertain-note">The model's best guess is healthy, but it isn't confident enough to call it. Treat this as "no obvious issue spotted" rather than a clean bill of health — worth a second look if anything seems off.</p>`;
+    } else {
+      badgeText = '❓ Possible Issue — Not Certain';
+      note = `<p class="uncertain-note">The model's best guess is ${top.condition.toLowerCase()} on ${top.crop}, but confidence is moderate. Worth a closer look rather than treating this as a firm diagnosis.</p>`;
+    }
+  } else {
+    badgeClass = 'uncertain-badge';
+    badgeText = '❔ Unclear';
+    note = `<p class="uncertain-note">This image doesn't closely match any of the four trained crops (Cashew, Cassava, Maize, Tomato). It may be a different plant, a non-plant object, or an angle/lighting the model struggles with. Below are its closest guesses, not a diagnosis.</p>`;
   }
 
   let html = `<span class="top-badge ${badgeClass}">${badgeText}</span>${note}`;
